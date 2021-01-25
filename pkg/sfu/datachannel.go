@@ -37,6 +37,13 @@ type (
 	}
 )
 
+func NewDataChannel(label string) *Datachannel{
+	return &Datachannel{
+		label: label,
+		middlewares: make([]func(MessageProcessor) MessageProcessor, 0),
+	}
+}
+
 // Use adds the middlewares to the current Datachannel.
 // The middlewares are going to be executed before the OnMessage event fires.
 func (dc *Datachannel) Use(middlewares ...func(MessageProcessor) MessageProcessor) {
