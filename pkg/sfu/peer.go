@@ -61,6 +61,10 @@ func (p *Peer) ID() string {
 	return p.id
 }
 
+func (p *Peer) GetDataChannel(label string) *webrtc.DataChannel {
+	return p.subscriber.channels[label]
+}
+
 // Join initializes this peer for a given sessionID (takes an SDPOffer)
 func (p *Peer) Join(sid string, sdp webrtc.SessionDescription) (*webrtc.SessionDescription, error) {
 	if p.publisher != nil {
