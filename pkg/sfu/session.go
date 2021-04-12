@@ -194,7 +194,7 @@ func (s *Session) setRelayedDatachannel(peerID string, datachannel *webrtc.DataC
 			mws := newDCChain(dc.middlewares)
 			p := mws.Process(ProcessFunc(func(ctx context.Context, args ProcessArgs) {
 				if dc.onMessage != nil {
-					dc.onMessage(ctx, args, s.getDataChannels(peerID, dc.Label))
+					dc.onMessage(ctx, args)
 				}
 			}))
 			s.mu.RLock()
