@@ -18,6 +18,7 @@ type Session interface {
 	AddPeer(peer Peer)
 	RemovePeer(peer Peer)
 	AudioObserver() *AudioObserver
+	AddDataChannelMiddleware(dc *Datachannel)
 	AddDatachannel(owner string, dc *webrtc.DataChannel)
 	GetDCMiddlewares() []*Datachannel
 	GetDataChannelLabels() []string
@@ -48,7 +49,7 @@ func NewSession(id string, dcs []*Datachannel, cfg WebRTCTransportConfig) Sessio
 
 }
 
-func (s *SessionLocal) AddDataChannel(dc *Datachannel) {
+func (s *SessionLocal) AddDataChannelMiddleware(dc *Datachannel) {
 	s.mu.Lock()
 	s.datachannels = append(s.datachannels, dc)
 	s.mu.Unlock()
