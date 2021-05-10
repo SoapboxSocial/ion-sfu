@@ -17,7 +17,7 @@ type (
 	}
 
 	ProcessArgs struct {
-		Peer        *Peer
+		Peer        Peer
 		Message     webrtc.DataChannelMessage
 		DataChannel *webrtc.DataChannel
 	}
