@@ -23,6 +23,7 @@ type Session interface {
 	GetDCMiddlewares() []*Datachannel
 	GetDataChannelLabels() []string
 	GetDataChannels(origin, label string) (dcs []*webrtc.DataChannel)
+	Peers() []Peer
 }
 
 type SessionLocal struct {
@@ -36,6 +37,10 @@ type SessionLocal struct {
 	onCloseHandler func()
 }
 
+const (
+	AudioLevelsMethod = "audioLevels"
+)
+
 // NewSession creates a new SessionLocal
 func NewSession(id string, dcs []*Datachannel, cfg WebRTCTransportConfig) Session {
 	s := &SessionLocal{
@@ -46,7 +51,6 @@ func NewSession(id string, dcs []*Datachannel, cfg WebRTCTransportConfig) Sessio
 	}
 	go s.audioLevelObserver(cfg.Router.AudioLevelInterval)
 	return s
-
 }
 
 func (s *SessionLocal) AddDataChannelMiddleware(dc *Datachannel) {
@@ -258,7 +262,12 @@ func (s *SessionLocal) audioLevelObserver(audioLevelInterval int) {
 			continue
 		}
 
-		l, err := json.Marshal(&levels)
+		msg := ChannelAPIMessage{
+			Method: AudioLevelsMethod,
+			Params: levels,
+		}
+
+		l, err := json.Marshal(&msg)
 		if err != nil {
 			Logger.Error(err, "Marshaling audio levels err")
 			continue

@@ -1,6 +1,7 @@
 package sfu
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -36,7 +37,6 @@ type DownTrack struct {
 	sequencer     *sequencer
 	trackType     DownTrackType
 	bufferFactory *buffer.Factory
-	skipFB        int64
 	payload       []byte
 
 	spatialLayer  int32
@@ -205,12 +205,45 @@ func (d *DownTrack) SwitchSpatialLayer(targetLayer int64, setAsMax bool) {
 		}
 		if err := d.receiver.SwitchDownTrack(d, int(targetLayer)); err == nil {
 			atomic.StoreInt32(&d.spatialLayer, int32(targetLayer<<16)|int32(currentLayer))
-			atomic.StoreInt64(&d.skipFB, 4)
 			if setAsMax {
 				atomic.StoreInt64(&d.maxSpatialLayer, targetLayer)
 			}
 		}
 	}
+}
+
+func (d *DownTrack) UptrackLayersChange(availableLayers []uint16) (int64, error) {
+	if d.trackType == SimulcastDownTrack {
+		currentLayer := uint16(atomic.LoadInt32(&d.spatialLayer))
+		maxLayer := uint16(atomic.LoadInt64(&d.maxSpatialLayer))
+
+		var maxFound uint16 = 0
+		layerFound := false
+		var minFound uint16 = 0
+		for _, target := range availableLayers {
+			if target <= maxLayer {
+				if target > maxFound {
+					maxFound = target
+					layerFound = true
+				}
+			} else {
+				if minFound > target {
+					minFound = target
+				}
+			}
+		}
+		var targetLayer uint16
+		if layerFound {
+			targetLayer = maxFound
+		} else {
+			targetLayer = minFound
+		}
+		if currentLayer != targetLayer {
+			d.SwitchSpatialLayer(int64(targetLayer), false)
+		}
+		return int64(targetLayer), nil
+	}
+	return -1, fmt.Errorf("Downtrack %s does not support simulcast", d.id)
 }
 
 func (d *DownTrack) SwitchTemporalLayer(targetLayer int64, setAsMax bool) {
@@ -224,7 +257,6 @@ func (d *DownTrack) SwitchTemporalLayer(targetLayer int64, setAsMax bool) {
 			return
 		}
 		atomic.StoreInt32(&d.temporalLayer, int32(targetLayer<<16)|int32(currentLayer))
-		atomic.StoreInt64(&d.skipFB, 4)
 		if setAsMax {
 			atomic.StoreInt64(&d.maxTemporalLayer, targetLayer)
 		}
@@ -396,6 +428,7 @@ func (d *DownTrack) writeSimulcastRTP(extPkt *buffer.ExtPacket) error {
 	}
 	newSN := extPkt.Packet.SequenceNumber - d.snOffset
 	newTS := extPkt.Packet.Timestamp - d.tsOffset
+	payload := extPkt.Packet.Payload
 
 	var (
 		picID   uint16
@@ -404,11 +437,12 @@ func (d *DownTrack) writeSimulcastRTP(extPkt *buffer.ExtPacket) error {
 	if d.simulcast.temporalSupported {
 		if d.mime == "video/vp8" {
 			drop := false
-			if extPkt.Packet.Payload, picID, tlz0Idx, drop = setVP8TemporalLayer(extPkt, d); drop {
+			if picID, tlz0Idx, drop = setVP8TemporalLayer(extPkt, d); drop {
 				// Pkt not in temporal getLayer update sequence number offset to avoid gaps
 				d.snOffset++
 				return nil
 			}
+			payload = d.payload
 		}
 	}
 
@@ -438,7 +472,7 @@ func (d *DownTrack) writeSimulcastRTP(extPkt *buffer.ExtPacket) error {
 	hdr.SSRC = d.ssrc
 	hdr.PayloadType = d.payloadType
 
-	_, err := d.writeStream.WriteRTP(&hdr, extPkt.Packet.Payload)
+	_, err := d.writeStream.WriteRTP(&hdr, payload)
 	if err != nil {
 		Logger.Error(err, "Write packet err")
 	}
@@ -524,8 +558,7 @@ func (d *DownTrack) handleLayerChange(maxRatePacketLoss uint8, expectedMinBitrat
 	targetTemporalLayer := int64(temporalLayer >> 16)
 
 	if targetSpatialLayer == currentSpatialLayer && currentTemporalLayer == targetTemporalLayer {
-		skipFB := atomic.LoadInt64(&d.skipFB)
-		if skipFB == 0 {
+		if time.Now().After(d.simulcast.switchDelay) {
 			brs := d.receiver.GetBitrate()
 			cbr := brs[currentSpatialLayer]
 			mtl := d.receiver.GetMaxTemporalLayer()
@@ -535,11 +568,13 @@ func (d *DownTrack) handleLayerChange(maxRatePacketLoss uint8, expectedMinBitrat
 				if currentTemporalLayer < mctl && currentTemporalLayer+1 <= atomic.LoadInt64(&d.maxTemporalLayer) &&
 					expectedMinBitrate >= 3*cbr/4 {
 					d.SwitchTemporalLayer(currentTemporalLayer+1, false)
+					d.simulcast.switchDelay = time.Now().Add(3 * time.Second)
 				}
 				if currentTemporalLayer >= mctl && expectedMinBitrate >= 3*cbr/2 && currentSpatialLayer+1 <= atomic.LoadInt64(&d.maxSpatialLayer) &&
 					currentSpatialLayer+1 <= 2 {
 					d.SwitchSpatialLayer(currentSpatialLayer+1, false)
 					d.SwitchTemporalLayer(0, false)
+					d.simulcast.switchDelay = time.Now().Add(5 * time.Second)
 				}
 			}
 			if maxRatePacketLoss >= 25 {
@@ -548,12 +583,12 @@ func (d *DownTrack) handleLayerChange(maxRatePacketLoss uint8, expectedMinBitrat
 					brs[currentSpatialLayer-1] != 0 {
 					d.SwitchSpatialLayer(currentSpatialLayer-1, false)
 					d.SwitchTemporalLayer(mtl[currentSpatialLayer-1], false)
+					d.simulcast.switchDelay = time.Now().Add(10 * time.Second)
 				} else {
 					d.SwitchTemporalLayer(currentTemporalLayer-1, false)
+					d.simulcast.switchDelay = time.Now().Add(5 * time.Second)
 				}
 			}
-		} else {
-			atomic.AddInt64(&d.skipFB, -1)
 		}
 	}
 
